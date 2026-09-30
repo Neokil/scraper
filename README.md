@@ -62,7 +62,7 @@ These can be added later without fundamentally changing the API.
              ▼                        ▼                        ▼
       ┌──────────────┐        ┌──────────────┐        ┌──────────────┐
       │ scrape-01    │        │ scrape-02    │        │ scrape-03    │
-      │ LXC           │        │ LXC           │        │ LXC           │
+      │ LXC          │        │ LXC          │        │ LXC          │
       │              │        │              │        │              │
       │ Chromium     │        │ Chromium     │        │ Chromium     │
       │ Playwright   │        │ Playwright   │        │ Playwright   │
