@@ -1,0 +1,61 @@
+name: scraper
+
+services:
+  scrape-api:
+    build:
+      context: .
+      dockerfile: scrape-api/Dockerfile
+    environment:
+      SERVER_ADDRESS: :8080
+      PROFILES_DIR: /var/lib/scraper/profiles
+      WORKER_REQUEST_TIMEOUT: ${WORKER_REQUEST_TIMEOUT:-30s}
+      WORKER_TIMEOUT: ${WORKER_TIMEOUT:-30s}
+      DEFAULT_IDLE_TIMEOUT: ${DEFAULT_IDLE_TIMEOUT:-10m}
+      DASHBOARD_POLL_INTERVAL: ${DASHBOARD_POLL_INTERVAL:-3s}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${SCRAPE_API_PORT:-8080}:8080"
+    volumes:
+      - profiles:/var/lib/scraper/profiles
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    depends_on:
+      scrape-api:
+        condition: service_healthy
+      fixture:
+        condition: service_started
+    environment:
+      WORKER_ID: worker-01
+      WORKER_HOSTNAME: worker-01
+      WORKER_BASE_URL: http://worker:8081
+      WORKER_VNC_URL: http://worker:6080/websockify
+      SCRAPE_API_URL: http://scrape-api:8080
+      WORKER_CAPACITY: ${WORKER_CAPACITY:-3}
+      WORKER_HEARTBEAT_INTERVAL: ${WORKER_HEARTBEAT_INTERVAL:-5s}
+      SCREENSHOT_INTERVAL: ${SCREENSHOT_INTERVAL:-10s}
+      SCREENSHOT_RETENTION: ${SCREENSHOT_RETENTION:-10m}
+      ERROR_SCREENSHOT_RETENTION: ${ERROR_SCREENSHOT_RETENTION:-24h}
+      SCREENSHOT_MAX_BYTES: ${SCREENSHOT_MAX_BYTES:-1073741824}
+      ACTION_TIMEOUT: ${ACTION_TIMEOUT:-30s}
+      MAX_EVENTS: ${MAX_EVENTS:-500}
+      DISPLAY: ${DISPLAY_NUMBER:-:99}
+      DISPLAY_RESOLUTION: ${DISPLAY_RESOLUTION:-1920x1080}
+      DISPLAY_DEPTH: ${DISPLAY_DEPTH:-24}
+    shm_size: ${WORKER_SHM_SIZE:-2gb}
+    volumes:
+      - screenshots:/var/lib/scraper/screenshots
+    restart: unless-stopped
+
+  fixture:
+    build:
+      context: test/fixture-site
+    expose:
+      - "80"
+
+volumes:
+  profiles:
+  screenshots:

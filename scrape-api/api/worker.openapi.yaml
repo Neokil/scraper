@@ -1,0 +1,461 @@
+openapi: 3.1.0
+info:
+  title: Browser Worker Internal API
+  version: 0.1.0
+  description: Internal HTTP protocol. It is reachable by scrape-api, not public clients.
+servers:
+  - url: http://worker:8081
+paths:
+  /healthz:
+    get:
+      operationId: getWorkerHealth
+      summary: Check that the worker HTTP process is running
+      responses:
+        "200":
+          description: Worker process is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /internal/workers/register:
+    servers:
+      - url: http://scrape-api:8080
+        description: Central scrape-api callback target
+    post:
+      operationId: registerWorker
+      summary: Register a worker incarnation and reconcile all worker-owned state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkerRegistration"
+      responses:
+        "200":
+          description: Registered worker state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisteredWorker"
+        "400":
+          description: Invalid registration
+  /internal/workers/{workerId}/heartbeat:
+    servers:
+      - url: http://scrape-api:8080
+        description: Central scrape-api callback target
+    parameters:
+      - name: workerId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: heartbeatWorker
+      summary: Refresh worker health and reconcile all worker-owned state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkerHeartbeat"
+      responses:
+        "204":
+          description: Heartbeat accepted
+        "404":
+          description: Worker must register again
+        "409":
+          description: Worker incarnation changed and must register again
+  /internal/state:
+    get:
+      operationId: getWorkerState
+      responses:
+        "200":
+          description: Complete reconciliation state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions, snapshots]
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Session"
+                  snapshots:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Snapshot"
+  /internal/sessions:
+    post:
+      operationId: createWorkerSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkerSession"
+      responses:
+        "201":
+          description: Running session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+  /internal/sessions/{sessionId}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    delete:
+      operationId: deleteWorkerSession
+      responses:
+        "204":
+          description: Session terminated
+  /internal/sessions/{sessionId}/activity:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: reportWorkerSessionActivity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                at:
+                  type: string
+                  format: date-time
+      responses:
+        "204":
+          description: Activity recorded
+  /internal/sessions/{sessionId}/pages:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: createWorkerPage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id:
+                  type: string
+                url:
+                  type: string
+      responses:
+        "201":
+          description: Created page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Page"
+  /internal/sessions/{sessionId}/events:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listWorkerSessionEvents
+      responses:
+        "200":
+          description: Recent session events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Event"
+  /internal/pages/{pageId}:
+    parameters:
+      - $ref: "#/components/parameters/PageId"
+    get:
+      operationId: getWorkerPage
+      responses:
+        "200":
+          description: Page state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Page"
+    delete:
+      operationId: deleteWorkerPage
+      responses:
+        "204":
+          description: Page closed
+  /internal/pages/{pageId}/{operation}:
+    parameters:
+      - $ref: "#/components/parameters/PageId"
+      - name: operation
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [navigate, click, type, press, select, wait, evaluate, html, url, title, screenshot, events]
+    post:
+      operationId: performWorkerPageAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Action-specific result
+          content:
+            application/json:
+              schema: {}
+    get:
+      operationId: inspectWorkerPage
+      responses:
+        "200":
+          description: Inspection-specific response
+  /internal/pages/{pageId}/snapshots:
+    parameters:
+      - $ref: "#/components/parameters/PageId"
+    post:
+      operationId: createWorkerSnapshot
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                format:
+                  type: string
+                  enum: [png, jpeg]
+                quality:
+                  type: integer
+                  minimum: 0
+                  maximum: 100
+                full_page:
+                  type: boolean
+      responses:
+        "201":
+          description: Manual snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+  /internal/snapshots/{snapshotId}:
+    parameters:
+      - name: snapshotId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getWorkerSnapshot
+      responses:
+        "200":
+          description: Snapshot image
+    delete:
+      operationId: deleteWorkerSnapshot
+      responses:
+        "204":
+          description: Snapshot deleted
+components:
+  parameters:
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+    PageId:
+      name: pageId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    WorkerRegistration:
+      allOf:
+        - $ref: "#/components/schemas/WorkerHeartbeat"
+        - type: object
+          required: [worker_id, hostname, version, base_url, vnc_url]
+          properties:
+            worker_id:
+              type: string
+            hostname:
+              type: string
+            version:
+              type: string
+            base_url:
+              type: string
+              format: uri
+            vnc_url:
+              type: string
+              format: uri
+    WorkerHeartbeat:
+      type: object
+      required: [incarnation_id, cpu_percent, memory_bytes, capacity, sessions]
+      properties:
+        incarnation_id:
+          type: string
+        cpu_percent:
+          type: number
+          minimum: 0
+        memory_bytes:
+          type: integer
+          minimum: 0
+        capacity:
+          type: integer
+          minimum: 1
+          description: Scheduling and sizing target; it is not enforced as a hard limit.
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Session"
+        snapshots:
+          type: array
+          items:
+            $ref: "#/components/schemas/Snapshot"
+    RegisteredWorker:
+      type: object
+      required: [id, hostname, version, incarnation_id, status, capacity, cpu_percent, memory_bytes, active_sessions, last_heartbeat, created_at]
+      properties:
+        id:
+          type: string
+        hostname:
+          type: string
+        version:
+          type: string
+        incarnation_id:
+          type: string
+        status:
+          type: string
+          enum: [online, offline, draining]
+        capacity:
+          type: integer
+        cpu_percent:
+          type: number
+        memory_bytes:
+          type: integer
+        active_sessions:
+          type: integer
+        last_heartbeat:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    CreateWorkerSession:
+      type: object
+      required: [id, browser, profile, idle_timeout_seconds, profile_settings]
+      properties:
+        id:
+          type: string
+        browser:
+          type: string
+          enum: [chromium]
+        profile:
+          type: string
+        idle_timeout_seconds:
+          type: integer
+          minimum: 1
+        profile_settings:
+          type: object
+          additionalProperties: true
+    Session:
+      type: object
+      required: [id, worker, status, browser, profile, created_at, last_activity, idle_timeout_seconds, pages]
+      properties:
+        id:
+          type: string
+        worker:
+          type: string
+        status:
+          type: string
+          enum: [running]
+        browser:
+          type: string
+          enum: [chromium]
+        profile:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_activity:
+          type: string
+          format: date-time
+        idle_timeout_seconds:
+          type: integer
+        pages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Page"
+    Page:
+      type: object
+      required: [id, session_id, url, title, status, created_at, last_activity]
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        url:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_activity:
+          type: string
+          format: date-time
+    Event:
+      type: object
+      required: [id, timestamp, type, message]
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        session:
+          type: string
+        page:
+          type: string
+        type:
+          type: string
+        message:
+          type: string
+        url:
+          type: string
+        snapshot_id:
+          type: string
+        context:
+          type: object
+          additionalProperties: true
+    Snapshot:
+      type: object
+      required: [id, class, format, created_at, size_bytes]
+      properties:
+        id:
+          type: string
+        session:
+          type: string
+        page:
+          type: string
+        class:
+          type: string
+          enum: [periodic, error, manual]
+        format:
+          type: string
+          enum: [png, jpeg]
+        created_at:
+          type: string
+          format: date-time
+        size_bytes:
+          type: integer

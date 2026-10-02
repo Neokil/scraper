@@ -72,34 +72,32 @@ Use a monorepo with explicit service, contract, deployment, and documentation bo
 
 ~~~text
 /
-├── cmd/scrape-api/              Go entry point
-├── internal/
-│   ├── api/                     Public HTTP handlers and generated models
-│   ├── dashboard/               Dashboard handlers and view models
-│   ├── profiles/                JSON profile repository and validation
-│   ├── registry/                In-memory workers/sessions/pages
-│   ├── scheduler/               Least-loaded placement
-│   ├── workerclient/            Internal worker protocol adapter
-│   └── recovery/                Registration and reconciliation
-├── web/
-│   ├── templates/               Separate Go HTML templates
-│   ├── static/css/              Separate CSS files
-│   ├── static/js/               Separate maintainable JavaScript files
-│   └── static/vendor/novnc/     Pinned noVNC client assets
+├── scrape-api/                  Self-contained central Go service
+│   ├── cmd/scrape-api/          Go entry point
+│   ├── internal/
+│   │   ├── api/                 Public HTTP handlers
+│   │   ├── dashboard/           Dashboard handlers and view models
+│   │   ├── profiles/            JSON profile repository and validation
+│   │   ├── registry/            Registry, scheduling, and reconciliation
+│   │   └── workerclient/        Internal worker protocol adapter
+│   ├── api/                     Public and worker OpenAPI contracts
+│   ├── profiles/                Bundled JSON profile definitions
+│   ├── web/
+│   │   ├── templates/           Separate Go HTML templates
+│   │   ├── static/css/          Separate CSS files
+│   │   ├── static/js/           Separate maintainable JavaScript files
+│   │   └── static/vendor/novnc/ Pinned noVNC client assets
+│   ├── scripts/                 Asset generation and contract validation
+│   ├── Dockerfile
+│   ├── go.mod
+│   ├── go.sum
+│   ├── package.json
+│   └── package-lock.json
 ├── worker/
-│   ├── src/
-│   │   ├── api/                 Internal API and generated types
-│   │   ├── browser/             Playwright session/page ownership
-│   │   ├── diagnostics/         Console, request, and page errors
-│   │   ├── screenshots/         Capture and retention
-│   │   ├── activity/            Idle tracking
-│   │   └── system/              Resource and display status
-│   └── test/
-├── api/
-│   ├── public.openapi.yaml
-│   └── worker.openapi.yaml
-├── profiles/
-│   └── generic.json
+│   ├── src/                     TypeScript API, browser, diagnostics, and storage
+│   ├── Dockerfile
+│   ├── package.json
+│   └── tsconfig.json
 ├── deploy/
 │   ├── docker/
 │   ├── proxmox/
@@ -331,10 +329,10 @@ Serve the dashboard from scrape-api. Use server-rendered Go templates plus small
 
 Keep source files cleanly separated:
 
-- HTML templates in web/templates
-- styles in web/static/css
-- behavior in web/static/js
-- pinned noVNC assets in web/static/vendor/novnc
+- HTML templates in scrape-api/web/templates
+- styles in scrape-api/web/static/css
+- behavior in scrape-api/web/static/js
+- pinned noVNC assets in scrape-api/web/static/vendor/novnc
 
 They may be embedded into the Go binary for deployment with go:embed, but must remain separate maintainable source files.
 

@@ -1,0 +1,14 @@
+.git
+.gitignore
+.DS_Store
+.env
+bin
+coverage
+data
+node_modules
+scrape-api/node_modules
+scrape-api/web/static/vendor
+worker/node_modules
+worker/dist
+screenshots
+test-results

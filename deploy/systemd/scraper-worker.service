@@ -1,0 +1,22 @@
+[Unit]
+Description=Browser Scraping Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=scraper
+Group=scraper
+EnvironmentFile=/etc/scraper/worker.env
+ExecStart=/usr/local/bin/worker-entrypoint
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/scraper /tmp
+
+[Install]
+WantedBy=multi-user.target

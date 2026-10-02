@@ -1,0 +1,12 @@
+{
+  "name": "@scraper/scrape-api-assets",
+  "private": true,
+  "scripts": {
+    "generate": "./scripts/generate.sh",
+    "lint:openapi": "redocly lint api/public.openapi.yaml api/worker.openapi.yaml"
+  },
+  "devDependencies": {
+    "@novnc/novnc": "1.6.0",
+    "@redocly/cli": "2.56.0"
+  }
+}

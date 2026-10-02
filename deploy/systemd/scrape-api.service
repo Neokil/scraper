@@ -1,0 +1,23 @@
+[Unit]
+Description=Browser Scraping Central API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=scraper
+Group=scraper
+EnvironmentFile=/etc/scraper/api.env
+ExecStart=/usr/local/bin/scrape-api
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/scraper
+AmbientCapabilities=
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

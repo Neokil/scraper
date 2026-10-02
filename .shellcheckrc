@@ -1,0 +1,2 @@
+# Runtime-loaded source and configuration files are unavailable during static analysis.
+disable=SC1090,SC1091,SC2154

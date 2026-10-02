@@ -1,0 +1,62 @@
+{{define "session.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}} · Scrape Control</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body data-auto-refresh="{{.PollMS}}">
+  <header class="topbar">
+    <a class="brand" href="/">Scrape Control</a>
+    <nav><a href="/">Overview</a><a href="/profiles">Profiles</a><a href="/static/docs/public.html">API docs</a></nav>
+  </header>
+  <main>
+    <section class="heading">
+      <div><p class="eyebrow">Session</p><h1>{{.Session.ID}}</h1></div>
+      <div class="actions">
+        <a class="button secondary" href="{{.Session.VNCURL}}">Open browser</a>
+        <button class="button danger" data-delete-session="{{.Session.ID}}">Terminate</button>
+      </div>
+    </section>
+    <aside class="notice">The live browser view is a shared worker desktop and may show other sessions on {{.Worker.ID}}.</aside>
+    <section class="facts">
+      <dl>
+        <div><dt>Status</dt><dd><span class="status {{.Session.Status}}">{{.Session.Status}}</span></dd></div>
+        <div><dt>Worker</dt><dd>{{.Worker.ID}}</dd></div>
+        <div><dt>Profile</dt><dd>{{.Session.Profile}}</dd></div>
+        <div><dt>Created</dt><dd>{{time .Session.CreatedAt}}</dd></div>
+        <div><dt>Last activity</dt><dd>{{time .Session.LastActivity}}</dd></div>
+        <div><dt>Idle timeout</dt><dd>{{.Session.IdleTimeoutSeconds}} seconds</dd></div>
+        <div><dt>Idle deadline</dt><dd>{{deadline .Session}}</dd></div>
+        <div><dt>Worker CPU</dt><dd>{{printf "%.1f" .Worker.CPUPercent}}%</dd></div>
+        <div><dt>Worker memory</dt><dd>{{memory .Worker.MemoryBytes}}</dd></div>
+      </dl>
+    </section>
+    <section>
+      <h2>Pages</h2>
+      <div class="grid pages">
+      {{range .Session.Pages}}
+        <article class="card page-card">
+          <img loading="lazy" src="/v1/pages/{{.ID}}/screenshot?format=jpeg&amp;quality=60&amp;monitoring=1" alt="Latest screenshot for {{.ID}}">
+          <div class="page-body">
+            <strong>{{if .Title}}{{.Title}}{{else}}Untitled page{{end}}</strong>
+            <a href="{{.URL}}" target="_blank" rel="noreferrer">{{.URL}}</a>
+            <small>{{.ID}}</small>
+          </div>
+        </article>
+      {{else}}
+        <div class="empty">This session has no pages.</div>
+      {{end}}
+      </div>
+    </section>
+    <section>
+      <h2>Recent diagnostics</h2>
+      <pre class="events" data-events-url="/v1/sessions/{{.Session.ID}}/events?monitoring=1">Loading…</pre>
+    </section>
+  </main>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
+{{end}}

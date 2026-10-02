@@ -1,0 +1,20 @@
+{{define "vnc.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Browser</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="vnc">
+  <header>
+    <a href="/sessions/{{.}}">Back</a>
+    <strong>Shared worker display · {{.}}</strong>
+    <span id="status">Connecting...</span>
+  </header>
+  <div id="screen"></div>
+  <script type="module" src="/static/js/vnc.js"></script>
+</body>
+</html>
+{{end}}

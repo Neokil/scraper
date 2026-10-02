@@ -1,0 +1,56 @@
+{{define "index.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body data-auto-refresh="{{.PollMS}}">
+  <header class="topbar">
+    <a class="brand" href="/">Scrape Control</a>
+    <nav><a href="/">Overview</a><a href="/profiles">Profiles</a><a href="/static/docs/public.html">API docs</a></nav>
+  </header>
+  <main>
+    <section class="heading">
+      <div><p class="eyebrow">Infrastructure</p><h1>Browser fleet</h1></div>
+      <span class="muted">Auto-refreshing</span>
+    </section>
+    <section>
+      <h2>Workers</h2>
+      <div class="grid">
+      {{range .Workers}}
+        <article class="card">
+          <div class="card-title"><strong>{{.ID}}</strong><span class="status {{.Status}}">{{.Status}}</span></div>
+          <dl>
+            <div><dt>Sessions</dt><dd>{{.ActiveSessions}} / target {{.Capacity}}</dd></div>
+            <div><dt>CPU</dt><dd>{{printf "%.1f" .CPUPercent}}%</dd></div>
+            <div><dt>Memory</dt><dd>{{memory .MemoryBytes}}</dd></div>
+            <div><dt>Heartbeat</dt><dd>{{time .LastHeartbeat}}</dd></div>
+          </dl>
+        </article>
+      {{else}}
+        <div class="empty">No workers have registered yet.</div>
+      {{end}}
+      </div>
+    </section>
+    <section>
+      <h2>Active sessions</h2>
+      <div class="session-list">
+      {{range .Sessions}}
+        <a class="session-row" href="/sessions/{{.ID}}">
+          <span><strong>{{.ID}}</strong><small>{{.WorkerID}}</small></span>
+          <span>{{len .Pages}} pages · idle deadline {{deadline .}}</span>
+          <span class="status {{.Status}}">{{.Status}}</span>
+        </a>
+      {{else}}
+        <div class="empty">No browser sessions are active.</div>
+      {{end}}
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
+{{end}}

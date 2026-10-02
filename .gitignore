@@ -1,0 +1,14 @@
+.DS_Store
+.env
+deploy/proxmox/config.env
+bin/
+coverage/
+dist/
+node_modules/
+scrape-api/web/static/vendor/
+worker/node_modules/
+worker/dist/
+data/
+screenshots/
+test-results/
+/scrape-api/scrape-api

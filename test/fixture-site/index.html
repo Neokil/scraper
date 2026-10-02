@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Scraper fixture</title></head>
+<body>
+  <h1>Browser worker fixture</h1>
+  <label>Search <input id="search" autocomplete="off"></label>
+  <button id="submit">Submit</button>
+  <label>Region
+    <select id="region">
+      <option value="eu">Europe</option>
+      <option value="us">United States</option>
+    </select>
+  </label>
+  <p class="result" hidden></p>
+  <a id="navigate" href="/result.html">Result page</a>
+  <script>
+    const search = document.querySelector("#search");
+    const result = document.querySelector(".result");
+    document.querySelector("#submit").addEventListener("click", () => {
+      result.textContent = search.value;
+      result.hidden = false;
+    });
+    search.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") document.querySelector("#submit").click();
+    });
+  </script>
+</body>
+</html>

@@ -1,1110 +1,280 @@
 # Browser Scraping Infrastructure
 
-## 1. Overview
+A self-hosted control plane for interactive, headed Chromium sessions. Clients use one Go HTTP service, `scrape-api`; it schedules sessions onto TypeScript/Playwright workers and proxies browser automation, screenshots, diagnostics, and noVNC access without exposing worker APIs to clients.
 
-Build a self-hosted browser automation infrastructure running on a Proxmox server.
+> [!WARNING]
+> This version intentionally has no authentication. It is for a trusted LAN only. The JavaScript evaluation endpoint executes arbitrary code in a page, profile files can contain proxy credentials, and a worker's noVNC display is shared by every session on that worker. Do not expose this service or worker ports to the internet.
 
-The system provides a central HTTP API that other applications can use to create and control persistent browser sessions without knowing where or how the browser is running.
+The detailed design decisions and acceptance criteria are recorded in [plan.md](plan.md).
 
-The initial version focuses exclusively on **interactive browser sessions**. A job/queue-based scraping API is intentionally out of scope for the first version and may be added later.
+## What is implemented
 
-### Goals
+- A central Go/chi API with in-memory worker, session, page, and snapshot routing state.
+- A strict-TypeScript worker controlling one independent, always-headed Chromium process and clean temporary user-data directory per session.
+- Multiple pages per session and Playwright-backed navigate, click, type, press, select, wait, and evaluate operations.
+- HTML, URL, title, live screenshot, retained manual snapshot, and bounded diagnostic APIs.
+- Worker self-registration, heartbeats, drain/resume, offline detection, least-loaded placement, and incarnation-aware reconciliation.
+- Configurable per-session idle expiry. API/browser activity and actual noVNC input refresh it; monitoring traffic does not.
+- Periodic screenshots, longer-lived error screenshots, manual snapshots, retention cleanup, and a worker storage ceiling.
+- JSON profile templates stored by `scrape-api`, with clean runtime profiles for every new session.
+- A server-rendered dashboard with separate Go templates, CSS, and JavaScript, plus an embedded pinned noVNC client.
+- Self-contained ReDoc API reference pages generated from public and internal OpenAPI 3.1 contracts.
+- Native local Docker Compose images (including arm64) and a deterministic headed-browser end-to-end suite.
+- Proxmox VE 8.3.5 host-local automation for latest-Debian, unprivileged LXC templates and create/list/delete/reconcile workflows.
+- GitHub Actions for Go, TypeScript, OpenAPI, shell, LXC-helper, multi-architecture image, and Compose integration checks.
 
-* Run multiple isolated Chromium browser instances.
-* Use lightweight LXC containers as browser workers.
-* Provide a normal graphical browser environment using:
+There is deliberately no database, durable session history, authentication, queue, scheduler, proxy UI, CAPTCHA solver, fingerprint spoofing, Kubernetes integration, or autoscaling.
 
-  * Xvfb
-  * Openbox
-  * Chromium
-  * Playwright
-* Allow humans to remotely inspect/control browsers through noVNC.
-* Provide screenshots and browser status for monitoring/debugging.
-* Provide a central REST API.
-* Automatically assign sessions to available workers.
-* Support persistent browser profiles/cookies.
-* Keep the public API independent of the underlying worker implementation.
-* Make it possible to replace LXC workers with VMs or another backend later.
-
-### Non-goals for the initial version
-
-Do **not** implement:
-
-* Scraping jobs / job queues.
-* Scheduled scraping.
-* Automatic CAPTCHA solving.
-* Proxy management UI.
-* Browser fingerprint spoofing.
-* Kubernetes/container orchestration.
-* Automatic scaling.
-
-These can be added later without fundamentally changing the API.
-
----
-
-# 2. High-Level Architecture
+## Architecture
 
 ```text
-                         ┌──────────────────────────┐
-                         │       scrape-api         │
-                         │                          │
-                         │ REST API                  │
-                         │ Session manager           │
-                         │ Worker manager            │
-                         │ Profile manager           │
-                         │ Monitoring API            │
-                         └────────────┬─────────────┘
-                                      │
-                         Worker protocol / HTTP
-                                      │
-             ┌────────────────────────┼────────────────────────┐
-             │                        │                        │
-             ▼                        ▼                        ▼
-      ┌──────────────┐        ┌──────────────┐        ┌──────────────┐
-      │ scrape-01    │        │ scrape-02    │        │ scrape-03    │
-      │ LXC          │        │ LXC          │        │ LXC          │
-      │              │        │              │        │              │
-      │ Chromium     │        │ Chromium     │        │ Chromium     │
-      │ Playwright   │        │ Playwright   │        │ Playwright   │
-      │ Xvfb         │        │ Xvfb         │        │ Xvfb         │
-      │ Openbox      │        │ Openbox      │        │ Openbox      │
-      │ noVNC        │        │ noVNC        │        │ noVNC        │
-      └──────────────┘        └──────────────┘        └──────────────┘
+trusted-LAN client
+        |
+        | HTTP / WebSocket
+        v
+  scrape-api :8080
+  - public REST API
+  - in-memory registry
+  - profile files
+  - dashboard + noVNC client
+        |
+        | internal HTTP only
+        +------------------------+------------------------+
+        v                        v                        v
+ scrape-01 worker        scrape-02 worker        scrape-03 worker
+ Xvfb + Openbox          Xvfb + Openbox          Xvfb + Openbox
+ Playwright Chromium     Playwright Chromium     Playwright Chromium
+ x11vnc + websockify     x11vnc + websockify     x11vnc + websockify
 ```
 
-The API server must not expose the worker implementation directly.
+The production sizing target is three worker LXCs, three concurrent sessions per worker, and three pages per session. Those numbers are operational sizing signals, not application-enforced limits. Worker selection is least-loaded with a stable worker-ID tie break; draining workers keep existing sessions but receive no new ones.
 
-Clients communicate only with `scrape-api`.
+## Local quick start
 
----
+Prerequisites are Docker with Compose v2. The verification scripts additionally use `curl`, `jq`, Node.js, and `rg`.
 
-# 3. Browser Worker
-
-Each worker is an LXC container containing a complete graphical browser environment.
-
-## Components
-
-```text
-LXC
-├── Xvfb
-│   └── DISPLAY=:99
-├── Openbox
-├── Chromium
-├── Playwright
-├── x11vnc
-└── noVNC
+```bash
+cp .env.example .env       # optional overrides
+docker compose up --build --wait
 ```
 
-### Xvfb
+Open:
 
-Creates a virtual X display without requiring a physical GPU/display.
+- Dashboard: <http://localhost:8080/>
+- Public API reference: <http://localhost:8080/static/docs/public.html>
+- Internal protocol reference: <http://localhost:8080/static/docs/worker.html>
+- Health: <http://localhost:8080/healthz>
+- Readiness and online-worker count: <http://localhost:8080/readyz>
 
-Default:
+Stop the stack with:
 
-```text
-DISPLAY=:99
-Resolution: 1920x1080
+```bash
+docker compose down --volumes --remove-orphans
 ```
 
-### Openbox
+The Compose build is native to the host architecture and has been designed for the requested arm64 development environment. CI also builds both service images for linux/arm64 and linux/amd64.
 
-Provides basic window management.
+## First API workflow
 
-A full desktop environment such as XFCE is not required.
+Create a session with the bundled generic profile. Omitting `idle_timeout_seconds` uses the configured 10-minute default.
 
-### Chromium
-
-Chromium runs in non-headless mode against Xvfb.
-
-This is intentional: the browser must be visible through noVNC and behave like a normal graphical browser.
-
-### Playwright
-
-Playwright is used to control Chromium.
-
-The worker should expose a worker API to the central API service.
-
-### noVNC
-
-Provides browser-based remote access to the virtual display.
-
-Example:
-
-```text
-https://scraper.example/vnc/{session-id}
+```bash
+session_id="$({
+  curl -fsS http://localhost:8080/v1/sessions \
+    -H 'content-type: application/json' \
+    -d '{"browser":"chromium","profile":"generic","idle_timeout_seconds":600}'
+} | jq -r .id)"
 ```
 
-A user should be able to open this URL and see/interact with the browser.
+Create a page and interact with it:
 
----
+```bash
+page_id="$({
+  curl -fsS "http://localhost:8080/v1/sessions/$session_id/pages" \
+    -H 'content-type: application/json' \
+    -d '{"url":"https://example.com"}'
+} | jq -r .id)"
 
-# 4. Worker Lifecycle
-
-Workers should register themselves with the API server.
-
-Example:
-
-```http
-POST /internal/workers/register
+curl -fsS "http://localhost:8080/v1/pages/$page_id/title"
+curl -fsS "http://localhost:8080/v1/pages/$page_id/evaluate" \
+  -H 'content-type: application/json' \
+  -d '{"expression":"document.querySelector(\"h1\")?.textContent"}'
+curl -fsS "http://localhost:8080/v1/pages/$page_id/screenshot?format=jpeg&quality=60" \
+  --output page.jpg
 ```
 
-```json
-{
-  "worker_id": "scrape-01",
-  "hostname": "scrape-01",
-  "version": "1.0.0",
-  "capacity": 5
-}
+Open `http://localhost:8080/v1/sessions/$session_id/vnc` for live browser control. Terminate the session when finished:
+
+```bash
+curl -fsS -X DELETE "http://localhost:8080/v1/sessions/$session_id"
 ```
 
-The API server maintains worker state.
+The full public contract, request schemas, filters, response bodies, and problem responses are in [scrape-api/api/public.openapi.yaml](scrape-api/api/public.openapi.yaml).
 
-Possible states:
+## Session and recovery semantics
 
-```text
-online
-offline
-draining
-```
+A session owns one persistent Playwright browser context and Chromium process while it is running. Its tabs are pages inside that context. The worker uses a fresh temporary user-data directory for every session and removes it at termination, so cookies, local storage, cache, downloads, and login state do not survive into a later session. Reauthentication after worker or session restart is expected.
 
-A worker should periodically send heartbeats.
+Runtime ownership is intentional:
 
-```http
-POST /internal/workers/{workerId}/heartbeat
-```
+- `scrape-api` keeps current routing metadata in memory.
+- Each worker is authoritative for its active sessions and pages.
+- A worker sends its full live state on registration and every heartbeat.
+- After an API restart, worker registration reconstructs the central registry.
+- A worker restart changes its incarnation and loses all of that worker's sessions.
+- Session deletion removes both browser state and central routing metadata; there is no historical session store.
+- JSON profile definitions persist on the central filesystem. Worker snapshots persist on the worker filesystem according to their retention class.
 
-The heartbeat should include basic resource/session information.
+The default idle timeout is 600 seconds and can be overridden per `POST /v1/sessions`. Explicit session/page API operations, Playwright navigation/network activity, and keyboard/pointer input from the embedded noVNC client count as activity. Heartbeats, periodic screenshots, dashboard polling, and passive VNC framebuffer updates do not.
+
+## Profiles
+
+Profile definitions live as individual `<name>.json` files in `PROFILES_DIR`. `GET /v1/profiles`, `GET /v1/profiles/{name}`, and `POST /v1/profiles` are supported; updating and deleting profiles are intentionally not part of v1. Names must match `^[a-z0-9][a-z0-9-]{0,62}$`, files are created atomically, and duplicates return HTTP 409.
 
 Example:
 
 ```json
 {
-  "cpu_percent": 31.4,
-  "memory_bytes": 1874329600,
-  "active_sessions": 2,
-  "capacity": 5
-}
-```
-
-If heartbeats stop for a configurable period, the worker should be considered offline.
-
----
-
-# 5. Session Model
-
-A **session** represents one persistent browser context.
-
-Example:
-
-```text
-Session
-└── Browser
-    ├── Page / Tab 1
-    ├── Page / Tab 2
-    └── Page / Tab 3
-```
-
-A session is assigned to exactly one worker.
-
-The client should not need to know which worker is being used.
-
-Example:
-
-```json
-{
-  "id": "sess_8f31c2",
-  "worker": "scrape-03",
-  "status": "running"
-}
-```
-
----
-
-# 6. Browser Profiles
-
-Sessions may optionally use a named persistent browser profile.
-
-Example:
-
-```text
-profiles/
-├── amazon-de
-├── ebay-de
-├── github
-└── generic
-```
-
-A profile should be able to contain:
-
-* Cookies
-* Local storage
-* Browser preferences
-* Session state
-* Locale
-* Timezone
-* Optional proxy configuration
-
-The exact storage mechanism is implementation-dependent.
-
-A profile must not be shared simultaneously by multiple browser contexts unless explicitly supported.
-
-For example:
-
-```text
-amazon-de
-    ↓
-session-123
-```
-
-is valid.
-
-But:
-
-```text
-amazon-de
-├── session-123
-└── session-456
-```
-
-should either be prohibited or use isolated copies of the profile.
-
----
-
-# 7. Public REST API
-
-Base URL:
-
-```text
-/v1
-```
-
-## Sessions
-
-### Create session
-
-```http
-POST /v1/sessions
-```
-
-Request:
-
-```json
-{
+  "name": "desktop-de",
+  "description": "German desktop context",
   "browser": "chromium",
-  "profile": "amazon-de",
-  "headless": false
+  "userAgent": "Mozilla/5.0 ...",
+  "locale": "de-DE",
+  "timezoneId": "Europe/Berlin",
+  "viewport": { "width": 1920, "height": 1080 },
+  "deviceScaleFactor": 1,
+  "colorScheme": "light",
+  "javaScriptEnabled": true,
+  "ignoreHTTPSErrors": false,
+  "acceptDownloads": true,
+  "geolocation": { "latitude": 52.52, "longitude": 13.405, "accuracy": 50 },
+  "permissions": ["geolocation"],
+  "extraHTTPHeaders": { "x-client": "scraper" },
+  "proxy": { "server": "http://proxy.lan:3128", "bypass": "localhost" }
 }
 ```
 
-Response:
+Only explicitly typed Playwright browser-context settings are accepted. Profiles are immutable templates, not browser-data directories. The generic profile is in [scrape-api/profiles/generic.json](scrape-api/profiles/generic.json); the complete field reference is in [docs/profiles.md](docs/profiles.md).
 
-```json
-{
-  "id": "sess_8f31c2",
-  "worker": "scrape-03",
-  "status": "running",
-  "browser": "chromium",
-  "vnc_url": "/v1/sessions/sess_8f31c2/vnc"
-}
+## Monitoring and diagnostics
+
+The worker records bounded events for console errors, uncaught page errors, failed requests, navigation errors, Playwright/action errors, and unexpected browser closure. Error events from page/action failures can reference retained screenshots. Events include the active session/page IDs, URL, timestamp, message, and safe context; public responses do not expose stack traces or worker connection URLs.
+
+Screenshot classes are:
+
+| Class | Default retention | Access |
+| --- | --- | --- |
+| `periodic` | 10 minutes | Used for monitoring and automatically cleaned |
+| `error` | 24 hours | Routed through `scrape-api` while retained |
+| `manual` | Until explicit deletion | Created and fetched by opaque snapshot ID |
+
+`SCREENSHOT_MAX_BYTES` bounds total worker storage. Oldest periodic/error images are evicted first; an attempted manual snapshot is rejected if retained manual images leave no room. Existing manual images have no time expiry and are never silently evicted. A manual or error snapshot can outlive its session until deletion/expiry, but it does not preserve a discoverable historical session record. Restarting a worker preserves snapshot files on its filesystem/volume and republishes routable manual/error metadata; deleting the worker LXC loses them.
+
+## Dashboard and noVNC
+
+The dashboard is rendered by Go and uses maintainable source files under `scrape-api/web/templates`, `scrape-api/web/static/css`, and `scrape-api/web/static/js`. It shows worker state/resources, active sessions, pages, current screenshots, recent diagnostics, profile management, terminate controls, and an Open Browser button.
+
+The noVNC browser and WebSocket are both served through `scrape-api`; clients never connect to x11vnc/websockify directly. Xvfb is shared per worker to reduce overhead, so the live view can show windows belonging to other sessions on the same worker. Browser processes and their temporary profiles remain separate.
+
+## Configuration
+
+All runtime settings are environment variables. Durations accept Go duration syntax in `scrape-api` and positive `ms`, `s`, `m`, or `h` values in the worker.
+
+### scrape-api
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SERVER_ADDRESS` | `:8080` | HTTP listen address |
+| `PROFILES_DIR` | `./profiles` | Authoritative JSON profile directory |
+| `WORKER_REQUEST_TIMEOUT` | `30s` | Central-to-worker HTTP timeout |
+| `WORKER_TIMEOUT` | `30s` | Heartbeat age before a worker is offline |
+| `DEFAULT_IDLE_TIMEOUT` | `10m` | Session default when omitted |
+| `DASHBOARD_POLL_INTERVAL` | `3s` | Dashboard refresh period |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
+
+### worker
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `WORKER_ID` | hostname | Stable worker identifier |
+| `WORKER_HOSTNAME` | hostname | Display hostname |
+| `WORKER_ADDRESS` / `WORKER_PORT` | `0.0.0.0` / `8081` | Internal API listener |
+| `WORKER_BASE_URL` | derived | URL used by `scrape-api` |
+| `WORKER_VNC_URL` | derived | Internal websockify URL |
+| `SCRAPE_API_URL` | `http://scrape-api:8080` | Registration/heartbeat target |
+| `WORKER_CAPACITY` | `3` | Dashboard/sizing target, not a hard cap |
+| `WORKER_HEARTBEAT_INTERVAL` | `10s` | Registration/heartbeat interval |
+| `ACTION_TIMEOUT` | `30s` | Default and maximum browser action timeout |
+| `MAX_EVENTS` | `500` | Per-session diagnostic ring size |
+| `SCREENSHOT_INTERVAL` | `10s` | Periodic capture interval |
+| `SCREENSHOT_RETENTION` | `10m` | Periodic image retention |
+| `ERROR_SCREENSHOT_RETENTION` | `24h` | Error image retention |
+| `SCREENSHOT_MAX_BYTES` | `1073741824` | Per-worker image storage ceiling |
+| `SCREENSHOT_ROOT` | `./screenshots` | Worker image/sidecar directory |
+| `SESSION_ROOT` | `./sessions` | Temporary user-data parent |
+| `DISPLAY` | `:99` | Shared X display |
+| `DISPLAY_RESOLUTION` / `DISPLAY_DEPTH` | `1920x1080` / `24` | Xvfb geometry |
+
+Compose overrides are documented in [.env.example](.env.example). Proxmox deployment values are separate in [deploy/proxmox/config.example.env](deploy/proxmox/config.example.env).
+
+## Development and validation
+
+Go 1.24 and Node.js 20 or newer are required outside Docker.
+
+```bash
+cd scrape-api
+npm ci --ignore-scripts
+npm run generate             # pinned noVNC + self-contained API docs
+npm run lint:openapi
+go test -race ./...
+go vet ./...
+cd ..
+
+cd worker
+npm ci --ignore-scripts
+npm run lint
+npm test
 ```
 
-The worker should be selected automatically.
+The Compose acceptance suite uses real headed Chromium:
 
-Worker selection should initially use a simple least-loaded strategy.
-
----
-
-### List sessions
-
-```http
-GET /v1/sessions
+```bash
+docker compose up --build --wait
+./test/e2e/smoke.sh
+./test/e2e/recovery.sh
 ```
 
-Optional filters:
+The smoke suite covers profiles, three pages, all browser actions, inspection, screenshots, diagnostics, dashboard routes, the noVNC WebSocket, deletion, and idle expiry. The recovery suite restarts each service to prove API reconciliation and worker-session loss semantics. See [docs/operations.md](docs/operations.md) for operating and troubleshooting details.
 
-```text
-?status=running
-?worker=scrape-03
+## Proxmox deployment
+
+Production automation is intended to run directly as root on the Proxmox VE 8.3.5 host containing this repository. It selects the latest available Debian standard template, creates unprivileged amd64 LXCs on `Synology-Backup`, attaches them to DHCP on `vmbr0`, discovers guest IPs, injects service configuration, and uses systemd for supervision.
+
+The normal flow is:
+
+```bash
+cd deploy/proxmox
+cp config.example.env config.env
+./build-api-template.sh
+./build-worker-template.sh
+./create-fleet.sh
+./list.sh
 ```
 
----
-
-### Get session
-
-```http
-GET /v1/sessions/{sessionId}
-```
-
-Response:
-
-```json
-{
-  "id": "sess_8f31c2",
-  "worker": "scrape-03",
-  "status": "running",
-  "created_at": "2026-09-30T07:30:00Z",
-  "last_activity": "2026-09-30T07:32:12Z",
-  "pages": 3
-}
-```
-
----
-
-### Delete session
-
-```http
-DELETE /v1/sessions/{sessionId}
-```
-
-This terminates the browser session and releases the worker resources.
-
----
-
-# 8. Pages / Tabs
-
-A page represents a browser tab.
-
-### Create page
-
-```http
-POST /v1/sessions/{sessionId}/pages
-```
-
-Request:
-
-```json
-{
-  "url": "https://example.com"
-}
-```
-
-Response:
-
-```json
-{
-  "id": "page_a72f91",
-  "url": "https://example.com",
-  "title": "Example Domain"
-}
-```
-
-If `url` is omitted, create a blank page.
-
----
-
-### List pages
-
-```http
-GET /v1/sessions/{sessionId}/pages
-```
-
----
-
-### Get page
-
-```http
-GET /v1/pages/{pageId}
-```
-
----
-
-### Close page
-
-```http
-DELETE /v1/pages/{pageId}
-```
-
----
-
-# 9. Navigation
-
-```http
-POST /v1/pages/{pageId}/navigate
-```
-
-Request:
-
-```json
-{
-  "url": "https://example.com/products",
-  "wait_until": "domcontentloaded"
-}
-```
-
-Supported `wait_until` values should map to Playwright:
-
-```text
-load
-domcontentloaded
-networkidle
-commit
-```
-
-The API should enforce a configurable maximum timeout.
-
----
-
-# 10. Page Interaction
-
-Initial interaction endpoints:
-
-```text
-POST /v1/pages/{pageId}/click
-POST /v1/pages/{pageId}/type
-POST /v1/pages/{pageId}/press
-POST /v1/pages/{pageId}/select
-POST /v1/pages/{pageId}/wait
-```
-
-### Click
-
-```json
-{
-  "selector": "button#accept",
-  "timeout": 10000
-}
-```
-
-### Type
-
-```json
-{
-  "selector": "#search",
-  "text": "3D printer"
-}
-```
-
-### Press
-
-```json
-{
-  "selector": "#search",
-  "key": "Enter"
-}
-```
-
-### Wait
-
-```json
-{
-  "selector": ".results",
-  "timeout": 10000
-}
-```
-
-The API should use Playwright's normal selector/action semantics rather than attempting to implement its own browser automation engine.
-
----
-
-# 11. JavaScript Evaluation
-
-Expose a controlled endpoint for executing JavaScript inside the page.
-
-```http
-POST /v1/pages/{pageId}/evaluate
-```
-
-Request:
-
-```json
-{
-  "expression": "document.querySelector('.price')?.textContent"
-}
-```
-
-Response:
-
-```json
-{
-  "result": "€129.99"
-}
-```
-
-The implementation should use Playwright's evaluation mechanism.
-
-The API must clearly document that arbitrary JavaScript execution is possible and therefore this endpoint must not be exposed publicly without authentication.
-
----
-
-# 12. Page Data
-
-Useful inspection endpoints:
-
-```http
-GET /v1/pages/{pageId}/html
-GET /v1/pages/{pageId}/screenshot
-GET /v1/pages/{pageId}/url
-GET /v1/pages/{pageId}/title
-```
-
-### Screenshot
-
-Support:
-
-```text
-GET /v1/pages/{pageId}/screenshot
-```
-
-Optional parameters:
-
-```text
-?full_page=true
-?format=jpeg
-?quality=60
-```
-
----
-
-# 13. Monitoring
-
-The infrastructure should continuously capture browser state.
-
-Each active page should have a screenshot taken approximately every 10 seconds.
-
-The screenshot interval must be configurable.
-
-Example:
-
-```text
-SCREENSHOT_INTERVAL=10s
-```
-
-Screenshots should be stored temporarily.
-
-Recommended retention:
-
-```text
-Normal screenshots:
-    last 5–10 minutes
-
-Error screenshots:
-    retained longer
-
-Manual snapshots:
-    retained until explicitly deleted
-```
-
-Do not retain unlimited screenshots.
-
----
-
-# 14. Monitoring Dashboard
-
-Provide a small web UI served by the API server.
-
-The dashboard should show:
-
-```text
-Workers
-├── scrape-01    ● online   2/5 sessions
-├── scrape-02    ● online   4/5 sessions
-└── scrape-03    ● online   0/5 sessions
-
-Sessions
-├── sess_123
-│   ├── worker: scrape-01
-│   ├── pages: 3
-│   └── status: running
-│
-└── sess_456
-    ├── worker: scrape-02
-    ├── pages: 1
-    └── status: running
-```
-
-For every page display the latest screenshot.
-
-Example:
-
-```text
-┌─────────────────────┐
-│ scrape-01           │
-│ session sess_123    │
-│                     │
-│  [latest screenshot]│
-│                     │
-│ ● running           │
-└─────────────────────┘
-```
-
-Clicking a session should provide a detailed view.
-
-The detail page should include:
-
-* All browser tabs
-* Current URLs
-* Page titles
-* Latest screenshots
-* Session status
-* Worker
-* CPU/memory information
-* Recent logs
-* Link to noVNC
-* Ability to terminate the session
-
----
-
-# 15. Live Browser Access
-
-Every session should have a noVNC endpoint.
-
-Example:
-
-```text
-/v1/sessions/{sessionId}/vnc
-```
-
-The dashboard should provide an **Open Browser** button.
-
-The user should be able to manually interact with the actual browser.
-
-This is important for debugging:
-
-```text
-Automation running
-        ↓
-Something unexpected happens
-        ↓
-Open noVNC
-        ↓
-See exact browser state
-        ↓
-Manually investigate/interact
-```
-
----
-
-# 16. Error Diagnostics
-
-The system should capture more than screenshots.
-
-For each page/session collect:
-
-* Current URL
-* Page title
-* Last activity timestamp
-* Browser console errors
-* Playwright errors
-* Failed network requests
-* Navigation errors
-* Screenshot on errors
-
-Example error record:
-
-```json
-{
-  "timestamp": "2026-09-30T07:45:12Z",
-  "session": "sess_123",
-  "page": "page_456",
-  "type": "page_error",
-  "message": "Timeout waiting for selector .results",
-  "url": "https://example.com/products",
-  "screenshot": "/screenshots/error_123.jpg"
-}
-```
-
----
-
-# 17. Worker ↔ API Communication
-
-Keep the internal worker protocol separate from the public API.
-
-The public API might receive:
-
-```text
-POST /v1/pages/page_123/click
-```
-
-The API server then sends an internal command to the worker.
-
-Conceptually:
-
-```text
-Client
-  │
-  │ REST
-  ▼
-scrape-api
-  │
-  │ internal worker protocol
-  ▼
-scrape-01
-  │
-  ▼
-Playwright
-  │
-  ▼
-Chromium
-```
-
-The internal protocol can initially be HTTP/JSON.
-
-Do not expose worker ports directly to external clients.
-
----
-
-# 18. Persistence
-
-Use PostgreSQL for persistent metadata.
-
-Suggested entities:
-
-```text
-workers
-sessions
-pages
-profiles
-events
-```
-
-Possible schema:
-
-```text
-workers
--------
-id
-hostname
-version
-status
-capacity
-last_heartbeat
-created_at
-
-sessions
---------
-id
-worker_id
-profile_id
-status
-created_at
-last_activity
-
-pages
------
-id
-session_id
-url
-title
-status
-created_at
-last_activity
-
-profiles
---------
-id
-name
-created_at
-updated_at
-
-events
-------
-id
-session_id
-page_id
-type
-message
-created_at
-```
-
-Screenshots should **not** be stored in PostgreSQL.
-
-Store them on filesystem/object storage and retain only their metadata in the database.
-
----
-
-# 19. Authentication
-
-The API must support authentication from the beginning.
-
-For the initial implementation, a simple API token is sufficient.
-
-Example:
-
-```http
-Authorization: Bearer <token>
-```
-
-All public endpoints should require authentication except potentially health/readiness endpoints.
-
-Authentication should be implemented in a way that allows a more sophisticated mechanism to be added later.
-
----
-
-# 20. Networking
-
-Recommended layout:
-
-```text
-LAN
- │
- ├── scrape-api
- │       :8080
- │
- └── workers
-         scrape-01
-         scrape-02
-         scrape-03
-```
-
-Workers should preferably be reachable only from the API server and administration network.
-
-Do not expose Chromium, Playwright, Xvfb, or worker APIs directly to the LAN/internet.
-
-Only the API/dashboard should be externally accessible.
-
----
-
-# 21. Configuration
-
-Configuration should be environment-variable based.
-
-Example:
-
-```text
-SERVER_ADDRESS=:8080
-
-DATABASE_URL=postgres://...
-
-AUTH_TOKEN=...
-
-WORKER_HEARTBEAT_INTERVAL=10s
-WORKER_TIMEOUT=30s
-
-SCREENSHOT_INTERVAL=10s
-SCREENSHOT_RETENTION=10m
-
-DEFAULT_BROWSER=chromium
-DEFAULT_DISPLAY=:99
-DEFAULT_WIDTH=1920
-DEFAULT_HEIGHT=1080
-```
-
----
-
-# 22. API Client
-
-The API should be designed so client libraries can easily be generated later.
-
-A Go client might eventually look like:
-
-```go
-client := scraper.NewClient("http://scrape-api:8080", token)
-
-session, err := client.Sessions.Create(ctx, scraper.CreateSessionRequest{
-    Profile: "amazon-de",
-})
-
-page, err := session.Pages.Create(ctx, scraper.CreatePageRequest{
-    URL: "https://example.com",
-})
-
-err = page.Navigate(ctx, "https://example.com/products")
-
-price, err := page.Evaluate(ctx,
-    `document.querySelector(".price")?.textContent`,
-)
-```
-
-The REST API is the source of truth; client libraries are convenience wrappers.
-
----
-
-# 23. Future Extensions
-
-The architecture should leave room for:
-
-### Scraping jobs
-
-```text
-POST /v1/jobs
-GET  /v1/jobs/{id}
-DELETE /v1/jobs/{id}
-```
-
-A job could acquire a session, execute a predefined scraper, and return structured data.
-
-### Worker auto-discovery
-
-Automatically discover/register new Proxmox workers.
-
-### Proxy management
-
-```text
-profiles
-    ↓
-proxy configuration
-    ↓
-browser session
-```
-
-### Browser types
-
-Potentially:
-
-```text
-chromium
-firefox
-webkit
-```
-
-The initial implementation only needs Chromium.
-
-### Session recording
-
-Potentially record browser sessions for later debugging.
-
-### WebSocket events
-
-Eventually expose:
-
-```text
-/v1/sessions/{id}/events
-```
-
-for real-time dashboard updates.
-
----
-
-# 24. Technology Recommendation
-
-Suggested initial stack:
-
-```text
-API server:        Go
-HTTP framework:    standard net/http or chi
-Database:          PostgreSQL
-Database access:   sqlc
-Browser automation:Playwright
-Browser:           Chromium
-Virtual display:   Xvfb
-Window manager:    Openbox
-Remote desktop:    x11vnc + noVNC
-Worker OS:         Debian-based LXC
-Deployment:        Proxmox
-```
-
-Avoid introducing Redis or another queue system until it is actually needed.
-
-The initial architecture does not require a queue.
-
----
-
-# 25. Initial Implementation Phases
-
-## Phase 1 — Worker
-
-Create a Debian-based LXC image containing:
-
-* Xvfb
-* Openbox
-* Chromium
-* Playwright
-* x11vnc
-* noVNC
-
-Verify:
-
-1. Chromium starts.
-2. Chromium uses Xvfb.
-3. noVNC displays the browser.
-4. Playwright can control Chromium.
-5. Multiple tabs work simultaneously.
-
----
-
-## Phase 2 — Worker API
-
-Implement:
-
-* Worker registration
-* Heartbeats
-* Session creation
-* Session destruction
-* Page creation
-* Page destruction
-* Navigation
-* Click
-* Type
-* Press
-* Wait
-* Evaluate
-* Screenshot
-
----
-
-## Phase 3 — Central API
-
-Implement:
-
-* Worker management
-* Worker selection
-* Session management
-* Page management
-* Profile management
-* Authentication
-* API error handling
-
-The central API should hide worker details from clients.
-
----
-
-## Phase 4 — Monitoring
-
-Implement:
-
-* Worker status
-* Session status
-* Page status
-* 10-second screenshots
-* Screenshot retention
-* Browser console/error collection
-* Dashboard
-* noVNC links
-
----
-
-## Phase 5 — Persistence
-
-Implement PostgreSQL persistence for:
-
-* Workers
-* Sessions
-* Pages
-* Profiles
-* Events
-
----
-
-# 26. API Design Principles
-
-1. **Clients should never need to know which worker hosts a session.**
-2. **A session belongs to exactly one worker.**
-3. **A session can contain multiple pages/tabs.**
-4. **Browser state should remain persistent for the lifetime of the session.**
-5. **Named profiles provide persistent login/browser state.**
-6. **The public API must not expose Playwright directly.**
-7. **The worker implementation must remain replaceable.**
-8. **Screenshots are primarily a debugging/monitoring mechanism, not permanent storage.**
-9. **The system should work with one worker and scale to many workers without API changes.**
-10. **Do not implement the future scraping-job system prematurely.**
-
-# 27. Definition of Done
-
-The first version is complete when another application can:
-
-```text
-1. Authenticate with scrape-api
-2. Create a browser session
-3. Receive an automatically selected worker
-4. Create multiple tabs
-5. Navigate to websites
-6. Click/type/interact with pages
-7. Execute JavaScript
-8. Read page information
-9. Capture screenshots
-10. Monitor the session through the web UI
-11. Open the actual browser through noVNC
-12. Close the session
-```
-
-The application using the API should **not need to know that the browser is running inside Proxmox, LXC, Xvfb, or Chromium**.
+Deletion is restricted to scraper-tagged CTIDs and requires typing the CTID unless `--force` is supplied. Full prerequisites, command behavior, validation, recovery, and rollback steps are in [docs/proxmox.md](docs/proxmox.md). The scripts are statically/test-double validated in CI; actual host execution remains an operator-run step.
+
+## Repository map
+
+| Path | Contents |
+| --- | --- |
+| `scrape-api/` | Central Go module, OpenAPI contracts, profiles, dashboard assets, and API Dockerfile |
+| `worker/` | TypeScript Playwright module and worker Dockerfile |
+| `deploy/docker/` | Worker graphical-process entrypoint |
+| `deploy/systemd/` | Hardened guest service units |
+| `deploy/proxmox/` | LXC template and lifecycle automation |
+| `test/e2e/` | Real-browser Compose tests |
+| `.github/workflows/ci.yml` | CI validation and architecture builds |
+
+## Deferred extensions
+
+The public REST API remains the source of truth so clients can be generated later. Future-compatible but unimplemented areas include job queues/scheduling, persistent cookies and session history, durable metadata storage, authentication/multi-user authorization, proxy management, CAPTCHA handling, browser fingerprint spoofing, Firefox/WebKit, public event streaming/session recording, Kubernetes, and automatic scaling.

@@ -1,0 +1,53 @@
+{{define "profiles.html"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}} · Scrape Control</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">Scrape Control</a>
+    <nav><a href="/">Overview</a><a href="/profiles">Profiles</a><a href="/static/docs/public.html">API docs</a></nav>
+  </header>
+  <main>
+    <section class="heading"><div><p class="eyebrow">Configuration</p><h1>Profiles</h1></div></section>
+    <div class="two-column">
+      <section>
+        <h2>Available</h2>
+        <div class="session-list">
+        {{range .Profiles}}
+          <article class="profile-row">
+            <strong>{{.Name}}</strong>
+            <span>{{.Browser}}</span>
+            <small>{{.Description}}</small>
+          </article>
+        {{end}}
+        </div>
+      </section>
+      <section>
+        <h2>Create profile</h2>
+        <form id="profile-form" class="form">
+          <label>Name<input name="name" pattern="[a-z0-9][a-z0-9-]{0,62}" required></label>
+          <label>Description<input name="description"></label>
+          <label>User agent<input name="userAgent"></label>
+          <div class="form-row">
+            <label>Locale<input name="locale" placeholder="en-US"></label>
+            <label>Timezone<input name="timezoneId" placeholder="Europe/Berlin"></label>
+          </div>
+          <div class="form-row">
+            <label>Width<input name="width" type="number" min="320" max="7680" value="1920"></label>
+            <label>Height<input name="height" type="number" min="240" max="4320" value="1080"></label>
+          </div>
+          <button class="button" type="submit">Create profile</button>
+          <output id="profile-result"></output>
+        </form>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
+{{end}}

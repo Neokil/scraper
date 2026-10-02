@@ -1,0 +1,934 @@
+openapi: 3.1.0
+info:
+  title: Browser Scraping API
+  version: 0.1.0
+  description: |
+    Central API for interactive, headed Chromium sessions. This service is designed
+    for a trusted LAN. The evaluate endpoint executes arbitrary JavaScript in the
+    current page and must not be exposed to untrusted networks.
+servers:
+  - url: /v1
+paths:
+  /workers:
+    get:
+      operationId: listWorkers
+      tags: [Workers]
+      responses:
+        "200":
+          description: Current workers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workers]
+                properties:
+                  workers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Worker"
+  /workers/{workerId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkerId"
+    get:
+      operationId: getWorker
+      tags: [Workers]
+      responses:
+        "200":
+          description: Worker
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Worker"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /workers/{workerId}/drain:
+    parameters:
+      - $ref: "#/components/parameters/WorkerId"
+    post:
+      operationId: drainWorker
+      tags: [Workers]
+      responses:
+        "200":
+          description: Draining worker
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Worker"
+  /workers/{workerId}/resume:
+    parameters:
+      - $ref: "#/components/parameters/WorkerId"
+    post:
+      operationId: resumeWorker
+      tags: [Workers]
+      responses:
+        "200":
+          description: Online worker
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Worker"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /sessions:
+    get:
+      operationId: listSessions
+      tags: [Sessions]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [starting, running, stopping]
+        - name: worker
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Active sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Session"
+    post:
+      operationId: createSession
+      tags: [Sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSession"
+            examples:
+              default:
+                value:
+                  browser: chromium
+                  profile: generic
+                  idle_timeout_seconds: 600
+      responses:
+        "201":
+          description: Created session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /sessions/{sessionId}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: getSession
+      tags: [Sessions]
+      responses:
+        "200":
+          description: Active session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteSession
+      tags: [Sessions]
+      responses:
+        "204":
+          description: Session terminated and metadata removed
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /sessions/{sessionId}/activity:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: reportSessionActivity
+      tags: [Sessions]
+      description: Used by the embedded noVNC client for actual keyboard and pointer input.
+      responses:
+        "204":
+          description: Activity recorded
+  /sessions/{sessionId}/pages:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listPages
+      tags: [Pages]
+      responses:
+        "200":
+          description: Session pages
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pages]
+                properties:
+                  pages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Page"
+    post:
+      operationId: createPage
+      tags: [Pages]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                url:
+                  type: string
+                  format: uri
+      responses:
+        "201":
+          description: Created page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Page"
+  /sessions/{sessionId}/events:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listSessionEvents
+      tags: [Diagnostics]
+      responses:
+        "200":
+          description: Bounded recent event buffer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventList"
+  /sessions/{sessionId}/vnc:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: openSessionVNC
+      tags: [Live access]
+      description: Returns the embedded noVNC page for the session worker's shared display.
+      responses:
+        "200":
+          description: noVNC HTML client
+          content:
+            text/html:
+              schema:
+                type: string
+  /sessions/{sessionId}/vnc/websocket:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: proxySessionVNCWebsocket
+      tags: [Live access]
+      description: WebSocket upgrade endpoint used by the embedded noVNC client.
+      responses:
+        "101":
+          description: WebSocket protocol switch
+  /pages/{pageId}:
+    parameters:
+      - $ref: "#/components/parameters/PageId"
+    get:
+      operationId: getPage
+      tags: [Pages]
+      responses:
+        "200":
+          description: Page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Page"
+    delete:
+      operationId: deletePage
+      tags: [Pages]
+      responses:
+        "204":
+          description: Page closed
+  /pages/{pageId}/navigate:
+    post:
+      operationId: navigatePage
+      tags: [Actions]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                wait_until:
+                  type: string
+                  enum: [load, domcontentloaded, networkidle, commit]
+                timeout:
+                  type: integer
+                  minimum: 1
+                  description: Must not exceed the worker ACTION_TIMEOUT maximum.
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResult"
+  /pages/{pageId}/click:
+    post:
+      operationId: clickPage
+      tags: [Actions]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      requestBody:
+        $ref: "#/components/requestBodies/SelectorAction"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResult"
+  /pages/{pageId}/type:
+    post:
+      operationId: typeInPage
+      tags: [Actions]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/SelectorAction"
+                - type: object
+                  required: [text]
+                  properties:
+                    text:
+                      type: string
+                    delay:
+                      type: number
+                      minimum: 0
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResult"
+  /pages/{pageId}/press:
+    post:
+      operationId: pressKeyInPage
+      tags: [Actions]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/SelectorAction"
+                - type: object
+                  required: [key]
+                  properties:
+                    key:
+                      type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResult"
+  /pages/{pageId}/select:
+    post:
+      operationId: selectPageOption
+      tags: [Actions]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/SelectorAction"
+                - type: object
+                  properties:
+                    value:
+                      type: string
+                    values:
+                      type: array
+                      items:
+                        type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResult"
+  /pages/{pageId}/wait:
+    post:
+      operationId: waitForPageSelector
+      tags: [Actions]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/SelectorAction"
+                - type: object
+                  properties:
+                    state:
+                      type: string
+                      enum: [attached, detached, visible, hidden]
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResult"
+  /pages/{pageId}/evaluate:
+    post:
+      operationId: evaluatePageJavaScript
+      tags: [Actions]
+      description: Executes arbitrary JavaScript in the page. The result must be JSON serializable.
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expression]
+              properties:
+                expression:
+                  type: string
+                timeout:
+                  type: integer
+                  minimum: 1
+                  description: Must not exceed the worker ACTION_TIMEOUT maximum.
+      responses:
+        "200":
+          description: Evaluation result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [result]
+                properties:
+                  result: {}
+  /pages/{pageId}/html:
+    get:
+      operationId: getPageHTML
+      tags: [Inspection]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      responses:
+        "200":
+          description: Current serialized page HTML
+          content:
+            text/html:
+              schema:
+                type: string
+  /pages/{pageId}/url:
+    get:
+      operationId: getPageURL
+      tags: [Inspection]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      responses:
+        "200":
+          description: Current URL
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url]
+                properties:
+                  url:
+                    type: string
+  /pages/{pageId}/title:
+    get:
+      operationId: getPageTitle
+      tags: [Inspection]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      responses:
+        "200":
+          description: Current title
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [title]
+                properties:
+                  title:
+                    type: string
+  /pages/{pageId}/screenshot:
+    get:
+      operationId: getPageScreenshot
+      tags: [Inspection]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+        - name: full_page
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [png, jpeg]
+            default: jpeg
+        - name: quality
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 100
+            default: 70
+      responses:
+        "200":
+          description: Screenshot
+          content:
+            image/png:
+              schema:
+                type: string
+                contentEncoding: binary
+            image/jpeg:
+              schema:
+                type: string
+                contentEncoding: binary
+  /pages/{pageId}/events:
+    get:
+      operationId: listPageEvents
+      tags: [Diagnostics]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      responses:
+        "200":
+          description: Bounded recent event buffer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventList"
+  /pages/{pageId}/snapshots:
+    post:
+      operationId: createManualSnapshot
+      tags: [Diagnostics]
+      parameters:
+        - $ref: "#/components/parameters/PageId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                format:
+                  type: string
+                  enum: [png, jpeg]
+                quality:
+                  type: integer
+                  minimum: 0
+                  maximum: 100
+                full_page:
+                  type: boolean
+      responses:
+        "201":
+          description: Manual snapshot metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+  /snapshots/{snapshotId}:
+    parameters:
+      - name: snapshotId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getSnapshot
+      tags: [Diagnostics]
+      responses:
+        "200":
+          description: Snapshot image
+          content:
+            image/png:
+              schema:
+                type: string
+                contentEncoding: binary
+            image/jpeg:
+              schema:
+                type: string
+                contentEncoding: binary
+    delete:
+      operationId: deleteSnapshot
+      tags: [Diagnostics]
+      responses:
+        "204":
+          description: Snapshot deleted
+  /profiles:
+    get:
+      operationId: listProfiles
+      tags: [Profiles]
+      responses:
+        "200":
+          description: Profile templates
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [profiles]
+                properties:
+                  profiles:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Profile"
+    post:
+      operationId: createProfile
+      tags: [Profiles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Profile"
+      responses:
+        "201":
+          description: Created profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Profile"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /profiles/{profileName}:
+    get:
+      operationId: getProfile
+      tags: [Profiles]
+      parameters:
+        - name: profileName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Profile template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Profile"
+components:
+  parameters:
+    WorkerId:
+      name: workerId
+      in: path
+      required: true
+      schema:
+        type: string
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+    PageId:
+      name: pageId
+      in: path
+      required: true
+      schema:
+        type: string
+  requestBodies:
+    SelectorAction:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SelectorAction"
+  responses:
+    ActionResult:
+      description: Action completed
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: true
+    BadRequest:
+      description: Invalid request
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: Resource not found
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Conflict:
+      description: Resource state conflict
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unavailable:
+      description: No worker is available
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code, detail]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        code:
+          type: string
+        detail:
+          type: string
+        request_id:
+          type: string
+    Worker:
+      type: object
+      required: [id, hostname, version, incarnation_id, status, capacity, active_sessions, last_heartbeat, created_at]
+      properties:
+        id:
+          type: string
+        hostname:
+          type: string
+        version:
+          type: string
+        incarnation_id:
+          type: string
+        status:
+          type: string
+          enum: [online, offline, draining]
+        capacity:
+          type: integer
+        cpu_percent:
+          type: number
+        memory_bytes:
+          type: integer
+        active_sessions:
+          type: integer
+        last_heartbeat:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    CreateSession:
+      type: object
+      additionalProperties: false
+      properties:
+        browser:
+          type: string
+          enum: [chromium]
+          default: chromium
+        profile:
+          type: string
+          default: generic
+        idle_timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 604800
+          default: 600
+    Session:
+      type: object
+      required: [id, worker, status, browser, profile, created_at, last_activity, idle_timeout_seconds]
+      properties:
+        id:
+          type: string
+        worker:
+          type: string
+        status:
+          type: string
+          enum: [starting, running, stopping]
+        browser:
+          type: string
+          enum: [chromium]
+        profile:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_activity:
+          type: string
+          format: date-time
+        idle_timeout_seconds:
+          type: integer
+        pages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Page"
+        vnc_url:
+          type: string
+    Page:
+      type: object
+      required: [id, session_id, url, title, status, created_at, last_activity]
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        url:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_activity:
+          type: string
+          format: date-time
+    SelectorAction:
+      type: object
+      required: [selector]
+      properties:
+        selector:
+          type: string
+        timeout:
+          type: integer
+          minimum: 1
+          description: Must not exceed the worker ACTION_TIMEOUT maximum.
+    EventList:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"
+    Event:
+      type: object
+      required: [id, timestamp, type, message]
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        session:
+          type: string
+        page:
+          type: string
+        type:
+          type: string
+        message:
+          type: string
+        url:
+          type: string
+        snapshot_id:
+          type: string
+        context:
+          type: object
+          additionalProperties: true
+    Snapshot:
+      type: object
+      required: [id, class, format, created_at, size_bytes]
+      properties:
+        id:
+          type: string
+        session:
+          type: string
+        page:
+          type: string
+        class:
+          type: string
+          enum: [periodic, error, manual]
+        format:
+          type: string
+          enum: [png, jpeg]
+        created_at:
+          type: string
+          format: date-time
+        size_bytes:
+          type: integer
+    Profile:
+      type: object
+      additionalProperties: false
+      required: [name, browser]
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+        description:
+          type: string
+        browser:
+          type: string
+          enum: [chromium]
+        userAgent:
+          type: string
+        locale:
+          type: string
+        timezoneId:
+          type: string
+        viewport:
+          type: object
+          required: [width, height]
+          properties:
+            width:
+              type: integer
+              minimum: 320
+              maximum: 7680
+            height:
+              type: integer
+              minimum: 240
+              maximum: 4320
+        deviceScaleFactor:
+          type: number
+          minimum: 0
+          maximum: 4
+        isMobile:
+          type: boolean
+        hasTouch:
+          type: boolean
+        colorScheme:
+          type: string
+          enum: [light, dark, no-preference]
+        reducedMotion:
+          type: string
+          enum: [reduce, no-preference]
+        javaScriptEnabled:
+          type: boolean
+        ignoreHTTPSErrors:
+          type: boolean
+        acceptDownloads:
+          type: boolean
+        geolocation:
+          type: object
+          required: [latitude, longitude]
+          properties:
+            latitude:
+              type: number
+            longitude:
+              type: number
+            accuracy:
+              type: number
+        permissions:
+          type: array
+          items:
+            type: string
+        extraHTTPHeaders:
+          type: object
+          additionalProperties:
+            type: string
+        proxy:
+          type: object
+          required: [server]
+          properties:
+            server:
+              type: string
+            bypass:
+              type: string
+            username:
+              type: string
+            password:
+              type: string

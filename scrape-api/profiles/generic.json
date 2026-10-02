@@ -1,0 +1,9 @@
+{
+  "name": "generic",
+  "description": "Default headed Chromium profile",
+  "browser": "chromium",
+  "viewport": {
+    "width": 1920,
+    "height": 1080
+  }
+}
